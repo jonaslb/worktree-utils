@@ -1,4 +1,4 @@
-# gwt-utils
+# Git Worktree Utilities (Fish - `wt`)
 
 Fish shell utilities for managing git worktrees with this layout:
 
@@ -20,6 +20,8 @@ Example project path:
 - `wt new <new-branch> [base-branch]`
 - `wt convert`
 - `wt update`
+- `wt status`
+- `wt prompt-pwd`
 - `wt help [install]`
 
 ### `wt co <branch>`
@@ -76,6 +78,33 @@ Behavior:
 - Notes branch/path mismatches when `relative_worktree_path != current_branch`
 - Skips detached HEAD worktrees
 
+Note:
+
+- `fetch --all --prune` prunes stale remote-tracking refs, not local branches.
+- Pull is only attempted for branches that currently have an upstream.
+
+### `wt status`
+
+Shows one-line status for each registered worktree in the project.
+
+Behavior:
+
+- Prints `main` first
+- Prints remaining worktrees by most recent commit time
+- Includes branch/path mismatch note
+- Includes upstream relation (`up-to-date`, `ahead`, `behind`, `diverged`, `no-upstream`)
+- Includes dirty summary (`staged`, `unstaged`, `untracked`)
+
+### `wt prompt-pwd`
+
+Prints a fish-prompt-friendly path.
+
+Behavior:
+
+- Uses fish-style path shortening for normal directories
+- If inside a wt project (`.bare` found in parent path), keeps `proj_dir` name fully visible
+- Still shortens deeper subdirectories according to `fish_prompt_pwd_dir_length`
+
 ## Installation (fish)
 
 Copy or symlink these files:
@@ -86,8 +115,9 @@ Copy or symlink these files:
 Example using symlinks from this repo:
 
 ```fish
-ln -sf /home/jlb/git/gwt-utils/functions/wt.fish ~/.config/fish/functions/wt.fish
-ln -sf /home/jlb/git/gwt-utils/completions/wt.fish ~/.config/fish/completions/wt.fish
+set -l repo (pwd)
+ln -sf $repo/functions/wt.fish ~/.config/fish/functions/wt.fish
+ln -sf $repo/completions/wt.fish ~/.config/fish/completions/wt.fish
 ```
 
 Then open a new fish session, or run:
@@ -100,9 +130,30 @@ source ~/.config/fish/functions/wt.fish
 
 Fish completions are included for:
 
-- subcommands (`co`, `new`, `convert`, `update`, `help`)
+- subcommands (`co`, `new`, `convert`, `update`, `status`, `prompt-pwd`, `help`)
 - branch names for `co`
 - base branch suggestions for `new` second argument
 - `wt help install`
 
 Branch completion reads from `proj_dir/.bare` when inside a converted project.
+
+## Prompt Integration (fish)
+
+Add this to your `~/.config/fish/config.fish`:
+
+```fish
+if not functions -q _wt_original_prompt_pwd
+    functions -c prompt_pwd _wt_original_prompt_pwd
+end
+
+function prompt_pwd
+    if type -q wt
+        set -l wt_pwd (wt prompt-pwd 2>/dev/null)
+        if test $status -eq 0 -a -n "$wt_pwd"
+            echo $wt_pwd
+            return
+        end
+    end
+    _wt_original_prompt_pwd
+end
+```
