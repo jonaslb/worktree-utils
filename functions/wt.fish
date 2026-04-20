@@ -71,6 +71,38 @@ function _wt_is_registered_worktree_path
     command git --git-dir "$bare" worktree list --porcelain | string match -q -- "worktree $path"
 end
 
+function _wt_write_zed_project_name
+    set -l project_dir "$argv[1]"
+    set -l worktree_path "$argv[2]"
+
+    set -l base_name (string sub -s 1 -l 16 -- (basename "$project_dir"))
+    set -l wt_name (_wt_worktree_name "$project_dir" "$worktree_path")
+    set -l project_name "$base_name/$wt_name"
+
+    set -l zed_dir "$worktree_path/.zed"
+    set -l settings_file "$zed_dir/settings.json"
+
+    mkdir -p "$zed_dir"
+
+    if test -f "$settings_file"
+        python3 -c "
+import json, sys
+path, name = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+data['project_name'] = name
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$settings_file" "$project_name"
+    else
+        printf '{\n  "project_name": "%s"\n}\n' "$project_name" > "$settings_file"
+    end
+end
+
 function _wt_co
     if test (count $argv) -ne 1
         echo "Usage: wt co <branch>" >&2
@@ -115,6 +147,7 @@ function _wt_co
         return $status
     end
 
+    _wt_write_zed_project_name "$project_dir" "$target"
     cd "$target"
 end
 
@@ -174,6 +207,7 @@ function _wt_new
         return $status
     end
 
+    _wt_write_zed_project_name "$project_dir" "$target"
     cd "$target"
 end
 
@@ -308,6 +342,7 @@ function _wt_update
             continue
         end
 
+        _wt_write_zed_project_name "$project_dir" "$path"
         set -l wt_name (_wt_worktree_name "$project_dir" "$path")
         set -l branch (command git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null)
 
