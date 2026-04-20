@@ -84,6 +84,11 @@ function _wt_write_zed_project_name
 
     mkdir -p "$zed_dir"
 
+    set -l gitignore_file "$zed_dir/.gitignore"
+    if not test -f "$gitignore_file"
+        printf "# Automatically created by wt\n*\n" > "$gitignore_file"
+    end
+
     if test -f "$settings_file"
         python3 -c "
 import json, sys
