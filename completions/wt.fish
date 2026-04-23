@@ -28,6 +28,7 @@ complete -c wt -f
 complete -c wt -n '__fish_use_subcommand' -a 'co' -d 'Checkout existing branch worktree'
 complete -c wt -n '__fish_use_subcommand' -a 'new' -d 'Create new branch worktree'
 complete -c wt -n '__fish_use_subcommand' -a 'rm' -d 'Remove a branch and its worktree'
+complete -c wt -n '__fish_use_subcommand' -a 'prune-merged' -d 'Remove all branches merged into main'
 complete -c wt -n '__fish_use_subcommand' -a 'convert' -d 'Convert repo to .bare worktree layout'
 complete -c wt -n '__fish_use_subcommand' -a 'update' -d 'Pull updates for tracking worktrees'
 complete -c wt -n '__fish_use_subcommand' -a 'status' -d 'Show one-line status for project worktrees'

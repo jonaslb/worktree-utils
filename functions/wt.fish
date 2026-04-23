@@ -5,6 +5,7 @@ function _wt_usage
     echo "  wt co <branch>"
     echo "  wt new <new-branch> [base-branch]"
     echo "  wt rm [-f] <branch> [branch ...]"
+    echo "  wt prune-merged"
     echo "  wt convert"
     echo "  wt update"
     echo "  wt status"
@@ -15,6 +16,7 @@ function _wt_usage
     echo "  co           Checkout an existing branch into proj_dir/<branch>"
     echo "  new          Create a new branch from main (or a provided base branch)"
     echo "  rm           Remove a branch and its worktree (confirms if not merged)"
+    echo "  prune-merged Remove all branches merged into main"
     echo "  convert      Convert a normal repo to the .bare + worktree layout"
     echo "  update       Pull updates for tracking branches across worktrees"
     echo "  status       Show one-line status for all project worktrees"
@@ -425,6 +427,65 @@ function _wt_rm
     return $failed
 end
 
+function _wt_prune_merged
+    if test (count $argv) -ne 0
+        echo "Usage: wt prune-merged" >&2
+        return 1
+    end
+
+    set -l project_dir (_wt_find_project_dir)
+    if test $status -ne 0
+        echo "Not inside a worktree project (missing .bare in parent path)." >&2
+        return 1
+    end
+
+    set -l bare "$project_dir/.bare"
+
+    if not _wt_ref_exists "$bare" "refs/heads/main"
+        echo "No 'main' branch found." >&2
+        return 1
+    end
+
+    set -l merged_branches (command git --git-dir "$bare" branch --merged main --format='%(refname:short)' 2>/dev/null)
+    set -l pruned 0
+
+    for branch in $merged_branches
+        if test "$branch" = "main"
+            continue
+        end
+
+        set -l target "$project_dir/$branch"
+
+        if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
+            cd "$project_dir/main"
+        end
+
+        if _wt_is_registered_worktree_path "$bare" "$target"
+            command git --git-dir "$bare" worktree remove --force "$target"
+            if test $status -ne 0
+                rm -rf "$target"
+                command git --git-dir "$bare" worktree prune
+            end
+        else if test -d "$target"
+            rm -rf "$target"
+        end
+
+        command git --git-dir "$bare" branch -d "$branch"
+        if test $status -ne 0
+            echo "Failed to delete branch '$branch'" >&2
+        else
+            echo "Removed merged branch: $branch"
+            set pruned (math "$pruned + 1")
+        end
+    end
+
+    if test "$pruned" -eq 0
+        echo "No merged branches to prune."
+    else
+        echo "Pruned $pruned merged branch(es)."
+    end
+end
+
 function _wt_update
     if test (count $argv) -ne 0
         echo "Usage: wt update" >&2
@@ -707,6 +768,8 @@ function wt
             _wt_new $argv[2..-1]
         case rm
             _wt_rm $argv[2..-1]
+        case prune-merged
+            _wt_prune_merged $argv[2..-1]
         case convert
             _wt_convert $argv[2..-1]
         case update
