@@ -286,7 +286,10 @@ end
 function _wt_ahead_behind
     set -l path "$argv[1]"
     set -l upstream "$argv[2]"
-    set -l counts_raw (command git -C "$path" rev-list --left-right --count HEAD..."$upstream")
+    if test -z "$upstream"
+        return 1
+    end
+    set -l counts_raw (command git -C "$path" rev-list --left-right --count HEAD..."$upstream" 2>/dev/null)
     set -l counts (string split \t -- "$counts_raw")
     if test (count $counts) -lt 2
         set counts (string split ' ' -- "$counts_raw")
@@ -304,7 +307,7 @@ function _wt_dirty_counts
     set -l unstaged 0
     set -l untracked 0
 
-    for line in (command git -C "$path" status --porcelain --untracked-files=normal)
+    for line in (command git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null)
         if string match -q -- '?? *' "$line"
             set untracked (math "$untracked + 1")
             continue
@@ -320,7 +323,9 @@ function _wt_dirty_counts
         end
     end
 
-    echo "$staged $unstaged $untracked"
+    echo $staged
+    echo $unstaged
+    echo $untracked
 end
 
 function _wt_update
@@ -360,7 +365,7 @@ function _wt_update
             echo "[$wt_name] branch/path mismatch: branch is '$branch' (path: $path)"
         end
 
-        set -l upstream (command git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+        set -l upstream (command git -C "$path" for-each-ref --format='%(upstream:short)' "refs/heads/$branch" 2>/dev/null)
         if test -z "$upstream"
             echo "[$wt_name] $branch has no upstream; skipping"
             continue
@@ -415,7 +420,7 @@ function _wt_print_status_line
             set mismatch " mismatch(path!=branch)"
         end
 
-        set -l upstream (command git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+        set -l upstream (command git -C "$path" for-each-ref --format='%(upstream:short)' "refs/heads/$branch" 2>/dev/null)
         if test -z "$upstream"
             set upstream_desc "no-upstream"
         else
@@ -477,6 +482,9 @@ function _wt_status
     set -l sep (printf '\x1f')
     for path in $all_paths
         if test "$path" = "$bare" -o "$path" = "$main_path"
+            continue
+        end
+        if not string match -q -- "$project_dir/*" "$path"
             continue
         end
         set -l ts (command git -C "$path" log -1 --format=%ct HEAD 2>/dev/null)
