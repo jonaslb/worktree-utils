@@ -27,6 +27,7 @@ end
 complete -c wt -f
 complete -c wt -n '__fish_use_subcommand' -a 'co' -d 'Checkout existing branch worktree'
 complete -c wt -n '__fish_use_subcommand' -a 'new' -d 'Create new branch worktree'
+complete -c wt -n '__fish_use_subcommand' -a 'rm' -d 'Remove a branch and its worktree'
 complete -c wt -n '__fish_use_subcommand' -a 'convert' -d 'Convert repo to .bare worktree layout'
 complete -c wt -n '__fish_use_subcommand' -a 'update' -d 'Pull updates for tracking worktrees'
 complete -c wt -n '__fish_use_subcommand' -a 'status' -d 'Show one-line status for project worktrees'
@@ -35,4 +36,6 @@ complete -c wt -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 
 complete -c wt -n '__fish_seen_subcommand_from co' -a '(__wt_branches)'
 complete -c wt -n '__fish_seen_subcommand_from new; and test (count (commandline -opc)) -ge 3' -a '(__wt_branches)'
+complete -c wt -n '__fish_seen_subcommand_from rm' -a '-f' -d 'Force remove without confirmation'
+complete -c wt -n '__fish_seen_subcommand_from rm; and not __fish_contains_opt f' -a '(__wt_branches)'
 complete -c wt -n '__fish_seen_subcommand_from help' -a 'install'

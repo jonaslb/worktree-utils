@@ -4,6 +4,7 @@ function _wt_usage
     echo "Usage:"
     echo "  wt co <branch>"
     echo "  wt new <new-branch> [base-branch]"
+    echo "  wt rm [-f] <branch> [branch ...]"
     echo "  wt convert"
     echo "  wt update"
     echo "  wt status"
@@ -11,13 +12,14 @@ function _wt_usage
     echo "  wt help [install]"
     echo
     echo "Commands:"
-    echo "  co       Checkout an existing branch into proj_dir/<branch>"
-    echo "  new      Create a new branch from main (or a provided base branch)"
-    echo "  convert  Convert a normal repo to the .bare + worktree layout"
-    echo "  update   Pull updates for tracking branches across worktrees"
-    echo "  status   Show one-line status for all project worktrees"
-    echo "  prompt-pwd  Print prompt path with full project name when in wt layout"
-    echo "  help     Show command help"
+    echo "  co           Checkout an existing branch into proj_dir/<branch>"
+    echo "  new          Create a new branch from main (or a provided base branch)"
+    echo "  rm           Remove a branch and its worktree (confirms if not merged)"
+    echo "  convert      Convert a normal repo to the .bare + worktree layout"
+    echo "  update       Pull updates for tracking branches across worktrees"
+    echo "  status       Show one-line status for all project worktrees"
+    echo "  prompt-pwd   Print prompt path with full project name when in wt layout"
+    echo "  help         Show command help"
 end
 
 function _wt_install_help
@@ -328,6 +330,101 @@ function _wt_dirty_counts
     echo $untracked
 end
 
+function _wt_rm
+    set -l force 0
+    set -l branches
+
+    for arg in $argv
+        switch "$arg"
+            case -f
+                set force 1
+            case '-*'
+                echo "Usage: wt rm [-f] <branch> [branch ...]" >&2
+                return 1
+            case '*'
+                set branches $branches "$arg"
+        end
+    end
+
+    if test (count $branches) -eq 0
+        echo "Usage: wt rm [-f] <branch> [branch ...]" >&2
+        return 1
+    end
+
+    set -l project_dir (_wt_find_project_dir)
+    if test $status -ne 0
+        echo "Not inside a worktree project (missing .bare in parent path)." >&2
+        return 1
+    end
+
+    set -l bare "$project_dir/.bare"
+    set -l failed 0
+
+    for branch in $branches
+        if test "$branch" = "main"
+            echo "Cannot remove the main worktree." >&2
+            set failed 1
+            continue
+        end
+
+        if not _wt_ref_exists "$bare" "refs/heads/$branch"
+            echo "Branch '$branch' does not exist." >&2
+            set failed 1
+            continue
+        end
+
+        set -l merged 0
+        if _wt_ref_exists "$bare" "refs/heads/main"
+            set -l branch_tip (command git --git-dir "$bare" rev-parse "refs/heads/$branch" 2>/dev/null)
+            set -l merge_base (command git --git-dir "$bare" merge-base "refs/heads/main" "refs/heads/$branch" 2>/dev/null)
+            if test -n "$merge_base" -a "$merge_base" = "$branch_tip"
+                set merged 1
+            end
+        end
+
+        set -l do_force $force
+        if test "$do_force" -eq 0 -a "$merged" -eq 0
+            read -l -P "Branch '$branch' is not merged into main. Remove anyway? [y/N] " confirm
+            if not string match -qi -- 'y' "$confirm"
+                echo "Skipping '$branch'."
+                continue
+            end
+            set do_force 1
+        end
+
+        set -l target "$project_dir/$branch"
+
+        if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
+            cd "$project_dir/main"
+        end
+
+        if _wt_is_registered_worktree_path "$bare" "$target"
+            if test "$do_force" -eq 1
+                command git --git-dir "$bare" worktree remove --force "$target"
+            else
+                command git --git-dir "$bare" worktree remove "$target"
+            end
+            if test $status -ne 0
+                rm -rf "$target"
+                command git --git-dir "$bare" worktree prune
+            end
+        else if test -d "$target"
+            rm -rf "$target"
+        end
+
+        if test "$do_force" -eq 1
+            command git --git-dir "$bare" branch -D "$branch"
+        else
+            command git --git-dir "$bare" branch -d "$branch"
+        end
+        if test $status -ne 0
+            set failed 1
+        end
+    end
+
+    return $failed
+end
+
 function _wt_update
     if test (count $argv) -ne 0
         echo "Usage: wt update" >&2
@@ -608,6 +705,8 @@ function wt
             _wt_co $argv[2..-1]
         case new
             _wt_new $argv[2..-1]
+        case rm
+            _wt_rm $argv[2..-1]
         case convert
             _wt_convert $argv[2..-1]
         case update
