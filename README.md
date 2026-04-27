@@ -32,6 +32,7 @@ Behavior:
 
 - Uses a local branch if present.
 - Falls back to a remote-tracking branch (`<remote>/<branch>`) if needed.
+- Runs `uv sync` automatically if the checked out worktree contains `pyproject.toml`.
 - Changes directory into the new worktree on success.
 
 ### `wt new <new-branch> [base-branch]`
@@ -43,6 +44,7 @@ Behavior:
 - Default base branch is `main`.
 - Optional second argument sets a different base branch.
 - Refuses to create if the new branch already exists (local or remote).
+- Runs `uv sync` automatically if the new worktree contains `pyproject.toml`.
 - Changes directory into the new worktree on success.
 
 Examples:

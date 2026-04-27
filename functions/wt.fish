@@ -48,6 +48,33 @@ function _wt_find_project_dir
     end
 end
 
+function _wt_autodetect_repo_projects
+    set -l path "$argv[1]"
+    if test -z "$path"
+        set path (pwd)
+    end
+
+    set -l detected
+    if test -f "$path/pyproject.toml"
+        set detected $detected pyproject
+    end
+
+    printf "%s\n" $detected
+end
+
+function _wt_sync_repo_projects
+    set -l path "$argv[1]"
+
+    for project_type in (_wt_autodetect_repo_projects "$path")
+        switch "$project_type"
+            case pyproject
+                echo "Detected pyproject project in $path; running uv sync ..."
+                command uv sync --directory "$path"
+                or return 1
+        end
+    end
+end
+
 function _wt_ref_exists
     set -l bare "$argv[1]"
     set -l ref "$argv[2]"
@@ -157,6 +184,8 @@ function _wt_co
     end
 
     _wt_write_zed_project_name "$project_dir" "$target"
+    _wt_sync_repo_projects "$target"
+    or return 1
     cd "$target"
 end
 
@@ -217,6 +246,8 @@ function _wt_new
     end
 
     _wt_write_zed_project_name "$project_dir" "$target"
+    _wt_sync_repo_projects "$target"
+    or return 1
     cd "$target"
 end
 
