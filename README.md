@@ -3,13 +3,13 @@
 Fish shell utilities for managing git worktrees with this layout:
 
 - `proj_dir/.bare` is the central bare git repository
-- `proj_dir/main` is the main branch worktree
+- `proj_dir/project_name` is the main branch worktree
 - `proj_dir/<branch>` is a worktree for any additional branch
 
 Example project path:
 
 - `/base_path/project_name/.bare`
-- `/base_path/project_name/main`
+- `/base_path/project_name/project_name`
 - `/base_path/project_name/feature-x`
 
 ## Commands
@@ -26,7 +26,7 @@ Example project path:
 
 ### `wt co <branch>`
 
-Checks out an existing branch into `proj_dir/<branch>`.
+Checks out an existing branch into `proj_dir/<branch>`, except `main` which uses `proj_dir/project_name`.
 
 Behavior:
 
@@ -75,9 +75,10 @@ Runs update checks across all registered worktrees under `proj_dir/.bare`.
 Behavior:
 
 - Fetches all remotes first (`fetch --all --prune`)
+- If a legacy `proj_dir/main` worktree for the `main` branch exists, prompts to move it to `proj_dir/project_name`
 - Only updates branches that have an upstream tracking branch
 - Skips pull (with a note) if branch is ahead or diverged from upstream
-- Notes branch/path mismatches when `relative_worktree_path != current_branch`
+- Notes branch/path mismatches, with `main` expected at `proj_dir/project_name`
 - Skips detached HEAD worktrees
 
 Note:
@@ -91,7 +92,7 @@ Shows one-line status for each registered worktree in the project.
 
 Behavior:
 
-- Prints `main` first
+- Prints the main worktree first
 - Prints remaining worktrees by most recent commit time
 - Includes branch/path mismatch note
 - Includes upstream relation (`up-to-date`, `ahead`, `behind`, `diverged`, `no-upstream`)

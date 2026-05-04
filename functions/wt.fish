@@ -13,12 +13,12 @@ function _wt_usage
     echo "  wt help [install]"
     echo
     echo "Commands:"
-    echo "  co           Checkout an existing branch into proj_dir/<branch>"
+    echo "  co           Checkout an existing branch into proj_dir/<branch> (main uses proj_dir/project_name)"
     echo "  new          Create a new branch from main (or a provided base branch)"
     echo "  rm           Remove a branch and its worktree (confirms if not merged)"
     echo "  prune-merged Remove all branches merged into main"
     echo "  convert      Convert a normal repo to the .bare + worktree layout"
-    echo "  update       Pull updates for tracking branches across worktrees"
+    echo "  update       Pull updates for tracking branches across worktrees, and offer main path migration"
     echo "  status       Show one-line status for all project worktrees"
     echo "  prompt-pwd   Print prompt path with full project name when in wt layout"
     echo "  help         Show command help"
@@ -46,6 +46,39 @@ function _wt_find_project_dir
 
         set dir (dirname "$dir")
     end
+end
+
+function _wt_main_worktree_path
+    set -l project_dir "$argv[1]"
+    echo "$project_dir/"(basename "$project_dir")
+end
+
+function _wt_branch_worktree_path
+    set -l project_dir "$argv[1]"
+    set -l branch "$argv[2]"
+    if test "$branch" = "main"
+        _wt_main_worktree_path "$project_dir"
+        return 0
+    end
+
+    echo "$project_dir/$branch"
+end
+
+function _wt_cd_main_worktree_or_project
+    set -l project_dir "$argv[1]"
+    set -l main_path (_wt_main_worktree_path "$project_dir")
+    if test -d "$main_path"
+        cd "$main_path"
+        return $status
+    end
+
+    set -l legacy_path "$project_dir/main"
+    if test -d "$legacy_path"
+        cd "$legacy_path"
+        return $status
+    end
+
+    cd "$project_dir"
 end
 
 function _wt_autodetect_repo_projects
@@ -153,7 +186,7 @@ function _wt_co
     end
 
     set -l bare "$project_dir/.bare"
-    set -l target "$project_dir/$branch"
+    set -l target (_wt_branch_worktree_path "$project_dir" "$branch")
 
     if test -e "$target"
         if _wt_is_registered_worktree_path "$bare" "$target"
@@ -233,7 +266,7 @@ function _wt_new
         end
     end
 
-    set -l target "$project_dir/$new_branch"
+    set -l target (_wt_branch_worktree_path "$project_dir" "$new_branch")
     if test -e "$target"
         echo "Target path already exists: $target" >&2
         return 1
@@ -292,18 +325,20 @@ function _wt_convert
     or return 1
     command git --git-dir "$repo_root/.bare" config --unset core.worktree >/dev/null 2>&1
 
-    command git --git-dir "$repo_root/.bare" worktree add "$repo_root/main" "$current_branch"
+    set -l main_path (_wt_main_worktree_path "$repo_root")
+    command git --git-dir "$repo_root/.bare" worktree add "$main_path" "$current_branch"
     or return 1
 
     for entry in (command find "$repo_root" -mindepth 1 -maxdepth 1)
         set -l name (basename "$entry")
-        if test "$name" = ".bare" -o "$name" = "main"
+        if test "$name" = ".bare" -o "$entry" = "$main_path"
             continue
         end
         rm -rf "$entry"
     end
 
-    echo "Conversion complete. Main worktree: $repo_root/main"
+    _wt_write_zed_project_name "$repo_root" "$main_path"
+    echo "Conversion complete. Main worktree: $main_path"
 end
 
 function _wt_list_worktree_paths
@@ -316,6 +351,73 @@ function _wt_worktree_name
     set -l path "$argv[2]"
     set -l project_prefix (string escape --style=regex -- "$project_dir/")
     string replace -r "^$project_prefix" "" -- "$path"
+end
+
+function _wt_worktree_path_matches_branch
+    set -l project_dir "$argv[1]"
+    set -l path "$argv[2]"
+    set -l branch "$argv[3]"
+    set -l expected_path (_wt_branch_worktree_path "$project_dir" "$branch")
+    test "$path" = "$expected_path"
+end
+
+function _wt_offer_main_worktree_migration
+    set -l project_dir "$argv[1]"
+    set -l bare "$argv[2]"
+    set -l legacy_path "$project_dir/main"
+    set -l canonical_path (_wt_main_worktree_path "$project_dir")
+
+    if test "$legacy_path" = "$canonical_path"
+        return 0
+    end
+
+    if not _wt_is_registered_worktree_path "$bare" "$legacy_path"
+        return 0
+    end
+
+    set -l branch (command git -C "$legacy_path" symbolic-ref --quiet --short HEAD 2>/dev/null)
+    if test "$branch" != "main"
+        return 0
+    end
+
+    if test -e "$canonical_path"
+        echo "[main] legacy main worktree is at $legacy_path, but target already exists: $canonical_path" >&2
+        echo "[main] Move or remove the target manually, then run wt update again." >&2
+        return 1
+    end
+
+    read -l -P "Move main worktree from $legacy_path to $canonical_path? [y/N] " confirm
+    if not string match -qi -- 'y' "$confirm"
+        echo "[main] keeping legacy path: $legacy_path"
+        return 0
+    end
+
+    set -l old_cwd (pwd)
+    set -l moved_cwd ""
+    if test "$old_cwd" = "$legacy_path"
+        set moved_cwd "$canonical_path"
+    else if string match -q -- "$legacy_path/*" "$old_cwd"
+        set -l rel (string replace "$legacy_path/" "" -- "$old_cwd")
+        set moved_cwd "$canonical_path/$rel"
+    end
+
+    if test -n "$moved_cwd"
+        cd "$project_dir"
+        or return 1
+    end
+
+    mkdir -p (dirname "$canonical_path")
+    command git --git-dir "$bare" worktree move "$legacy_path" "$canonical_path"
+    or return $status
+
+    _wt_write_zed_project_name "$project_dir" "$canonical_path"
+
+    if test -n "$moved_cwd"
+        cd "$moved_cwd"
+        or return 1
+    end
+
+    echo "[main] moved main worktree to $canonical_path"
 end
 
 function _wt_ahead_behind
@@ -425,10 +527,11 @@ function _wt_rm
             set do_force 1
         end
 
-        set -l target "$project_dir/$branch"
+        set -l target (_wt_branch_worktree_path "$project_dir" "$branch")
 
         if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
-            cd "$project_dir/main"
+            _wt_cd_main_worktree_or_project "$project_dir"
+            or return 1
         end
 
         if _wt_is_registered_worktree_path "$bare" "$target"
@@ -485,10 +588,11 @@ function _wt_prune_merged
             continue
         end
 
-        set -l target "$project_dir/$branch"
+        set -l target (_wt_branch_worktree_path "$project_dir" "$branch")
 
         if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
-            cd "$project_dir/main"
+            _wt_cd_main_worktree_or_project "$project_dir"
+            or return 1
         end
 
         if _wt_is_registered_worktree_path "$bare" "$target"
@@ -530,6 +634,9 @@ function _wt_update
     end
 
     set -l bare "$project_dir/.bare"
+    _wt_offer_main_worktree_migration "$project_dir" "$bare"
+    or return 1
+
     echo "Fetching remotes for $project_dir ..."
     command git --git-dir "$bare" fetch --all --prune
     if test $status -ne 0
@@ -550,7 +657,7 @@ function _wt_update
             continue
         end
 
-        if test "$wt_name" != "$branch"
+        if not _wt_worktree_path_matches_branch "$project_dir" "$path" "$branch"
             echo "[$wt_name] branch/path mismatch: branch is '$branch' (path: $path)"
         end
 
@@ -605,7 +712,7 @@ function _wt_print_status_line
         set branch_label "(detached)"
         set upstream_desc "detached-head"
     else
-        if test "$wt_name" != "$branch"
+        if not _wt_worktree_path_matches_branch "$project_dir" "$path" "$branch"
             set mismatch " mismatch(path!=branch)"
         end
 
@@ -658,7 +765,7 @@ function _wt_status
 
     set -l bare "$project_dir/.bare"
     set -l all_paths (_wt_list_worktree_paths "$bare")
-    set -l main_path "$project_dir/main"
+    set -l main_path (_wt_main_worktree_path "$project_dir")
 
     printf "%-24s %-24s %-38s %s\n" "worktree" "branch" "upstream" "dirty"
     printf "%-24s %-24s %-38s %s\n" "--------" "------" "--------" "-----"
