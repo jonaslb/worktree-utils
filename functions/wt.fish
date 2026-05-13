@@ -346,6 +346,11 @@ function _wt_list_worktree_paths
     command git --git-dir "$bare" worktree list --porcelain | command awk '/^worktree / { sub(/^worktree /, ""); print }'
 end
 
+function _wt_prune_missing_worktrees
+    set -l bare "$argv[1]"
+    command git --git-dir "$bare" worktree prune --verbose
+end
+
 function _wt_worktree_name
     set -l project_dir "$argv[1]"
     set -l path "$argv[2]"
@@ -639,6 +644,12 @@ function _wt_update
 
     echo "Fetching remotes for $project_dir ..."
     command git --git-dir "$bare" fetch --all --prune
+    if test $status -ne 0
+        return $status
+    end
+
+    echo "Pruning missing worktrees for $project_dir ..."
+    _wt_prune_missing_worktrees "$bare"
     if test $status -ne 0
         return $status
     end

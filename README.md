@@ -75,6 +75,7 @@ Runs update checks across all registered worktrees under `proj_dir/.bare`.
 Behavior:
 
 - Fetches all remotes first (`fetch --all --prune`)
+- Prunes registered worktrees whose filesystem path no longer exists (`git worktree prune`)
 - If a legacy `proj_dir/main` worktree for the `main` branch exists, prompts to move it to `proj_dir/project_name`
 - Only updates branches that have an upstream tracking branch
 - Skips pull (with a note) if branch is ahead or diverged from upstream
