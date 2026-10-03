@@ -4,8 +4,8 @@ function _wt_usage
     echo "Usage:"
     echo "  wt co <branch>"
     echo "  wt new <new-branch> [base-branch]"
-    echo "  wt rm [-f] <branch> [branch ...]"
-    echo "  wt prune-merged"
+    echo "  wt rm [-f] [-y] <branch> [branch ...]"
+    echo "  wt prune-merged [-f] [-y]"
     echo "  wt convert"
     echo "  wt update"
     echo "  wt status"
@@ -17,6 +17,8 @@ function _wt_usage
     echo "  new          Create a new branch from main (or a provided base branch)"
     echo "  rm           Remove a branch and its worktree (confirms if not merged)"
     echo "  prune-merged Remove all branches merged into main"
+    echo "               -f: also remove worktrees with local changes (rm: and unmerged branches)"
+    echo "               -y: remove worktrees outside the project dir without confirmation"
     echo "  convert      Convert a normal repo to the .bare + worktree layout"
     echo "  update       Pull updates for tracking branches across worktrees, and offer main path migration"
     echo "  status       Show one-line status for all project worktrees"
@@ -346,6 +348,42 @@ function _wt_list_worktree_paths
     command git --git-dir "$bare" worktree list --porcelain | command awk '/^worktree / { sub(/^worktree /, ""); print }'
 end
 
+function _wt_branch_checkout_path
+    set -l bare "$argv[1]"
+    set -l branch "$argv[2]"
+    command git --git-dir "$bare" worktree list --porcelain | command awk -v ref="branch refs/heads/$branch" '
+        /^worktree / { path = substr($0, 10) }
+        $0 == ref { print path; exit }
+    '
+end
+
+# Decide whether the worktree at $target (where $branch is checked out) may be removed.
+# Worktrees inside the project dir are removed freely; others need confirmation unless assume_yes is 1.
+# Returns 1 if removal is refused, 2 if the user declined.
+function _wt_confirm_worktree_removal
+    set -l project_dir "$argv[1]"
+    set -l branch "$argv[2]"
+    set -l target (path resolve -- "$argv[3]")
+    set -l assume_yes "$argv[4]"
+    set -l real_project_dir (path resolve -- "$project_dir")
+
+    if test "$target" = (_wt_main_worktree_path "$real_project_dir") -o "$target" = "$real_project_dir/main"
+        echo "Branch '$branch' is checked out in the main worktree ($target); not removing it." >&2
+        return 1
+    end
+
+    if string match -q -- "$real_project_dir/*" "$target"; or test "$assume_yes" -eq 1
+        return 0
+    end
+
+    read -l -P "Branch '$branch' is checked out outside the project at $target. Remove that worktree? [y/N] " confirm
+    if string match -qi -- 'y' "$confirm"
+        return 0
+    end
+    echo "Skipping '$branch'."
+    return 2
+end
+
 function _wt_prune_missing_worktrees
     set -l bare "$argv[1]"
     command git --git-dir "$bare" worktree prune --verbose
@@ -470,16 +508,63 @@ function _wt_dirty_counts
     echo $untracked
 end
 
+# Remove the worktree at $target. Without force, refuse if it has local changes.
+function _wt_remove_worktree
+    set -l project_dir "$argv[1]"
+    set -l bare "$argv[2]"
+    set -l target "$argv[3]"
+    set -l force "$argv[4]"
+
+    if not test -d "$target"
+        command git --git-dir "$bare" worktree prune
+        return $status
+    end
+
+    if test "$force" -ne 1
+        set -l counts (_wt_dirty_counts "$target")
+        set -l labels staged unstaged untracked
+        set -l details
+        for i in 1 2 3
+            if test "$counts[$i]" -gt 0
+                set -a details "$counts[$i] $labels[$i]"
+            end
+        end
+        if set -q details[1]
+            echo "Not removing worktree at $target: "(string join ', ' -- $details)" file(s); use -f to force." >&2
+            return 1
+        end
+    end
+
+    set -l real_target (path resolve -- "$target")
+    set -l real_cwd (pwd -P)
+    if string match -q -- "$real_target/*" "$real_cwd"; or test "$real_cwd" = "$real_target"
+        _wt_cd_main_worktree_or_project "$project_dir"
+        or return 1
+    end
+
+    set -l remove_args
+    if test "$force" -eq 1
+        set remove_args --force
+    end
+    if not command git --git-dir "$bare" worktree remove $remove_args "$target"
+        echo "Failed to remove worktree at $target." >&2
+        return 1
+    end
+end
+
 function _wt_rm
     set -l force 0
+    set -l assume_yes 0
     set -l branches
 
     for arg in $argv
         switch "$arg"
             case -f
                 set force 1
+            case -y --yes
+                set assume_yes 1
             case '-*'
-                echo "Usage: wt rm [-f] <branch> [branch ...]" >&2
+                echo "Usage: wt rm [-f] [-y] <branch> [branch ...]" >&2
                 return 1
             case '*'
                 set branches $branches "$arg"
@@ -487,7 +572,7 @@ function _wt_rm
     end
 
     if test (count $branches) -eq 0
-        echo "Usage: wt rm [-f] <branch> [branch ...]" >&2
+        echo "Usage: wt rm [-f] [-y] <branch> [branch ...]" >&2
         return 1
     end
 
@@ -522,38 +607,34 @@ function _wt_rm
             end
         end
 
-        set -l do_force $force
-        if test "$do_force" -eq 0 -a "$merged" -eq 0
+        set -l delete_unmerged $force
+        if test "$force" -eq 0 -a "$merged" -eq 0
             read -l -P "Branch '$branch' is not merged into main. Remove anyway? [y/N] " confirm
             if not string match -qi -- 'y' "$confirm"
                 echo "Skipping '$branch'."
                 continue
             end
-            set do_force 1
+            set delete_unmerged 1
         end
 
-        set -l target (_wt_branch_worktree_path "$project_dir" "$branch")
-
-        if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
-            _wt_cd_main_worktree_or_project "$project_dir"
-            or return 1
-        end
-
-        if _wt_is_registered_worktree_path "$bare" "$target"
-            if test "$do_force" -eq 1
-                command git --git-dir "$bare" worktree remove --force "$target"
-            else
-                command git --git-dir "$bare" worktree remove "$target"
+        set -l target (_wt_branch_checkout_path "$bare" "$branch")
+        if test -n "$target"
+            _wt_confirm_worktree_removal "$project_dir" "$branch" "$target" "$assume_yes"
+            switch $status
+                case 1
+                    set failed 1
+                    continue
+                case 2
+                    continue
             end
-            if test $status -ne 0
-                rm -rf "$target"
-                command git --git-dir "$bare" worktree prune
+
+            if not _wt_remove_worktree "$project_dir" "$bare" "$target" "$force"
+                set failed 1
+                continue
             end
-        else if test -d "$target"
-            rm -rf "$target"
         end
 
-        if test "$do_force" -eq 1
+        if test "$delete_unmerged" -eq 1
             command git --git-dir "$bare" branch -D "$branch"
         else
             command git --git-dir "$bare" branch -d "$branch"
@@ -567,9 +648,18 @@ function _wt_rm
 end
 
 function _wt_prune_merged
-    if test (count $argv) -ne 0
-        echo "Usage: wt prune-merged" >&2
-        return 1
+    set -l force 0
+    set -l assume_yes 0
+    for arg in $argv
+        switch "$arg"
+            case -f
+                set force 1
+            case -y --yes
+                set assume_yes 1
+            case '*'
+                echo "Usage: wt prune-merged [-f] [-y]" >&2
+                return 1
+        end
     end
 
     set -l project_dir (_wt_find_project_dir)
@@ -593,21 +683,14 @@ function _wt_prune_merged
             continue
         end
 
-        set -l target (_wt_branch_worktree_path "$project_dir" "$branch")
-
-        if string match -q -- "$target/*" (pwd); or test (pwd) = "$target"
-            _wt_cd_main_worktree_or_project "$project_dir"
-            or return 1
-        end
-
-        if _wt_is_registered_worktree_path "$bare" "$target"
-            command git --git-dir "$bare" worktree remove --force "$target"
-            if test $status -ne 0
-                rm -rf "$target"
-                command git --git-dir "$bare" worktree prune
+        set -l target (_wt_branch_checkout_path "$bare" "$branch")
+        if test -n "$target"
+            if not _wt_confirm_worktree_removal "$project_dir" "$branch" "$target" "$assume_yes"
+                continue
             end
-        else if test -d "$target"
-            rm -rf "$target"
+            if not _wt_remove_worktree "$project_dir" "$bare" "$target" "$force"
+                continue
+            end
         end
 
         command git --git-dir "$bare" branch -d "$branch"
